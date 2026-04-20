@@ -32,4 +32,4 @@ RUN mkdir -p /var/lib/zalo-crm/files
 
 EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/app.js"]
+CMD ["sh", "-c", "attempt=1; max_attempts=30; until npx prisma db push --url \"$DATABASE_URL\"; do if [ \"$attempt\" -ge \"$max_attempts\" ]; then echo 'Prisma schema sync failed after retries'; exit 1; fi; echo \"Database not reachable for schema sync (attempt $attempt/$max_attempts). Retrying in 5s...\"; attempt=$((attempt + 1)); sleep 5; done; exec node dist/app.js"]
