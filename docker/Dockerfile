@@ -32,5 +32,4 @@ RUN mkdir -p /var/lib/zalo-crm/files
 
 EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
-# Push schema to DB then start server
-CMD ["sh", "-c", "npx prisma db push --url \"$DATABASE_URL\" && node dist/app.js"]
+CMD ["node", "dist/app.js"]
