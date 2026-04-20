@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: zalo-crm-app
+    restart: unless-stopped
+    ports:
+      - "3080:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-crmuser}:${DB_PASSWORD}@db:5432/${DB_NAME:-zalocrm}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - file_storage:/var/lib/zalo-crm/files
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pg_data:
+  file_storage:
