@@ -14,9 +14,6 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://${DB_USER:-crmuser}:${DB_PASSWORD}@${DB_HOST:-db}:5432/${DB_NAME:-zalocrm}
-    depends_on:
-      db:
-        condition: service_healthy
     volumes:
       - file_storage:/var/lib/zalo-crm/files
     tmpfs:
