@@ -13,7 +13,7 @@ services:
       - .env
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://${DB_USER:-crmuser}:${DB_PASSWORD}@db:5432/${DB_NAME:-zalocrm}
+      - DATABASE_URL=postgresql://${DB_USER:-crmuser}:${DB_PASSWORD}@${DB_HOST:-db}:5432/${DB_NAME:-zalocrm}
     depends_on:
       db:
         condition: service_healthy
@@ -25,5 +25,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  pg_data:
   file_storage:
