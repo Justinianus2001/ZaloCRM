@@ -154,23 +154,33 @@ export async function syncFriendsForAccount(
   // không phân biệt với "0 friends" thật, sale không biết sync fail.
   // Defensive Array.isArray normalize giữ nguyên (cho shape variants), nhưng lỗi SDK
   // (rate limit, network) bubble lên outer try/catch.
+  // Fetch live friends first (critical)
   try {
     const liveRaw: any = await zaloOps.getAllFriends(accountId);
-    const sentRaw: any = await zaloOps.getSentFriendRequests(accountId);
     liveFriends = Array.isArray(liveRaw) ? liveRaw
       : Array.isArray(liveRaw?.data) ? liveRaw.data
       : Array.isArray(liveRaw?.items) ? liveRaw.items
       : [];
+  } catch (err) {
+    result.errors++;
+    logger.warn(`[friend-sync:${accountId}] SDK fetch failed for getAllFriends:`, err);
+    await logSyncError(orgId, accountId, opts.trigger, err, { phase: 'sdk_fetch_live' });
+    result.durationMs = Date.now() - startedAt;
+    return result;
+  }
+
+  // Fetch sent requests separately (non-critical, often throws 112 on Zalo)
+  try {
+    const sentRaw: any = await zaloOps.getSentFriendRequests(accountId);
     sentRequests = Array.isArray(sentRaw) ? sentRaw
       : Array.isArray(sentRaw?.data) ? sentRaw.data
       : Array.isArray(sentRaw?.items) ? sentRaw.items
       : [];
   } catch (err) {
     result.errors++;
-    logger.warn(`[friend-sync:${accountId}] SDK fetch failed:`, err);
-    await logSyncError(orgId, accountId, opts.trigger, err, { phase: 'sdk_fetch' });
-    result.durationMs = Date.now() - startedAt;
-    return result;
+    logger.warn(`[friend-sync:${accountId}] SDK fetch failed for getSentFriendRequests (ignoring):`, err);
+    await logSyncError(orgId, accountId, opts.trigger, err, { phase: 'sdk_fetch_sent' });
+    // We do NOT return here. Continue processing liveFriends even if sent requests fail.
   }
 
   result.liveCount = liveFriends.length + sentRequests.length;
