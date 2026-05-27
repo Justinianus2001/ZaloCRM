@@ -67,6 +67,15 @@ export async function mergeContacts(
       data: { contactId: primaryId },
     });
 
+    // Transfer ALL Friend rows từ secondaries → primary. KHÔNG delete duplicate
+    // vì 1 person có thể được chăm bởi cùng 1 sale nick qua NHIỀU Zalo identity
+    // (sau merge nhiều Contact thành 1). Unique còn lại là (zaloAccountId, zaloUidInNick)
+    // — Zalo identity thật.
+    await tx.friend.updateMany({
+      where: { contactId: { in: secondaryIds } },
+      data: { contactId: primaryId },
+    });
+
     // Update primary with merged data
     const updatedPrimary = await tx.contact.update({
       where: { id: primaryId },

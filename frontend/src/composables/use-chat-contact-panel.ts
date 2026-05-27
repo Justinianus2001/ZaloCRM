@@ -25,7 +25,13 @@ export function useChatContactPanel(
     fullName: '',
     crmName: '',
     phone: '',
+    phone2: '',
+    phone3: '',
     email: '',
+    gender: null as string | null,
+    birthDate: '',
+    addressLine: '',
+    occupation: '',
     source: null as string | null,
     status: null as string | null,
     nextAppointmentDate: '',
@@ -38,7 +44,13 @@ export function useChatContactPanel(
     form.fullName = c.fullName ?? '';
     form.crmName = c.crmName ?? '';
     form.phone = c.phone ?? '';
+    form.phone2 = c.phone2 ?? '';
+    form.phone3 = c.phone3 ?? '';
     form.email = c.email ?? '';
+    form.gender = c.gender ?? null;
+    form.birthDate = c.birthDate ? c.birthDate.slice(0, 10) : '';
+    form.addressLine = c.addressLine ?? '';
+    form.occupation = c.occupation ?? '';
     form.source = c.source ?? null;
     form.status = c.status ?? null;
     form.nextAppointmentDate = c.nextAppointment
@@ -71,11 +83,28 @@ export function useChatContactPanel(
     }
   }
 
-  watch(getContact, (c) => {
+  // Watch theo contact.id để repopulate form khi đổi sang KH khác.
+  // KHÔNG re-populate khi cùng contact (giữ field user đang edit).
+  watch(() => getContact()?.id, () => {
+    const c = getContact();
     if (!c) return;
     populateForm(c);
     fetchContactExtras(c.id);
-  }, { immediate: true, deep: true });
+  }, { immediate: true });
+
+  // Sync narrow fields từ ngoài vào (cột 3 đổi status / tags → cột 4 update theo).
+  // Chỉ sync status + tags vì đây là những field được mutate từ component khác.
+  // Các field text (name, phone, ...) user edit trực tiếp ở cột 4 nên KHÔNG sync ngược.
+  watch(() => getContact()?.status, (s) => {
+    if (s !== undefined && s !== form.status) form.status = s;
+  });
+  watch(() => getContact()?.tags, (t) => {
+    const arr = Array.isArray(t) ? [...t] : [];
+    // Compare shallow — chỉ update nếu khác (tránh override khi user vừa edit)
+    if (arr.length !== form.tags.length || arr.some((v, i) => v !== form.tags[i])) {
+      form.tags = arr;
+    }
+  }, { deep: true });
 
   async function saveContact() {
     const contactId = getContactId();
@@ -88,7 +117,15 @@ export function useChatContactPanel(
       fullName: form.fullName || null,
       crmName: form.crmName || null,
       phone: form.phone || null,
+      phone2: form.phone2 || null,
+      phone3: form.phone3 || null,
       email: form.email || null,
+      gender: form.gender || null,
+      birthDate: form.birthDate
+        ? new Date(form.birthDate + 'T00:00:00').toISOString()
+        : null,
+      addressLine: form.addressLine || null,
+      occupation: form.occupation || null,
       source: form.source || null,
       status: form.status || null,
       nextAppointment: form.nextAppointmentDate

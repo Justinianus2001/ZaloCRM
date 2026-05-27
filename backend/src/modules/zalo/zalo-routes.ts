@@ -6,16 +6,21 @@ import type { FastifyInstance } from 'fastify';
 import { authMiddleware } from '../auth/auth-middleware.js';
 import { zaloPool } from './zalo-pool.js';
 import { prisma } from '../../shared/database/prisma-client.js';
+import { getZaloScope, canManageAccount } from './zalo-scope.js';
 
 export async function zaloRoutes(app: FastifyInstance): Promise<void> {
   // All routes in this plugin require auth
   app.addHook('preHandler', authMiddleware);
 
   // GET /api/v1/zalo-accounts — list accounts with live status from pool
+  // RBAC scoped 2026-05-22: chỉ trả nicks user được phép xem (xem getZaloScope).
   app.get('/api/v1/zalo-accounts', async (request) => {
     const user = request.user!;
+    const userId = (user as any).userId ?? user.id;
+    const scope = await getZaloScope(userId, user.orgId, user.role);
+
     const accounts = await prisma.zaloAccount.findMany({
-      where: { orgId: user.orgId },
+      where: { orgId: user.orgId, id: { in: scope.accessibleIds } },
       select: {
         id: true,
         zaloUid: true,
@@ -23,6 +28,8 @@ export async function zaloRoutes(app: FastifyInstance): Promise<void> {
         avatarUrl: true,
         phone: true,
         status: true,
+        ownerUserId: true,
+        proxyUrl: true,
         lastConnectedAt: true,
         createdAt: true,
         owner: { select: { id: true, fullName: true, email: true } },
@@ -30,27 +37,45 @@ export async function zaloRoutes(app: FastifyInstance): Promise<void> {
       orderBy: { createdAt: 'asc' },
     });
 
-    // Merge live status from pool
+    // Merge live status from pool; mask proxy credentials; thêm canManage flag
     return accounts.map((a) => ({
       ...a,
+      proxyUrl: a.proxyUrl ? maskProxyUrl(a.proxyUrl) : null,
+      hasProxy: !!a.proxyUrl,
       liveStatus: zaloPool.getStatus(a.id),
+      canManage: canManageAccount(a.ownerUserId, userId, user.role),
+      isOwnedByMe: a.ownerUserId === userId,
     }));
   });
 
   // POST /api/v1/zalo-accounts — create a new account record
-  app.post<{ Body: { displayName?: string } }>(
+  app.post<{ Body: { displayName?: string; proxyUrl?: string } }>(
     '/api/v1/zalo-accounts',
     async (request, reply) => {
       const user = request.user!;
-      const { displayName } = request.body ?? {};
+      const { displayName, proxyUrl } = request.body ?? {};
 
-      const account = await prisma.zaloAccount.create({
-        data: {
-          orgId: user.orgId,
-          ownerUserId: user.id,
-          displayName: displayName ?? null,
-          status: 'qr_pending',
-        },
+      if (proxyUrl && !isValidProxyUrl(proxyUrl)) {
+        return reply.status(400).send({ error: 'Invalid proxy URL format. Use: http://[user:pass@]host:port' });
+      }
+
+      // FIX 2026-05-22 Bug A: tạo nick + auto-insert ZaloAccountAccess cho owner.
+      // Trước: owner KHÔNG hiện trong crew list (frontend đọc crew từ access table).
+      // Giờ: atomic create cả 2 trong tx, owner mặc định permission='admin'.
+      const account = await prisma.$transaction(async (tx) => {
+        const acc = await tx.zaloAccount.create({
+          data: {
+            orgId: user.orgId,
+            ownerUserId: user.id,
+            displayName: displayName ?? null,
+            proxyUrl: proxyUrl ?? null,
+            status: 'qr_pending',
+          },
+        });
+        await tx.zaloAccountAccess.create({
+          data: { zaloAccountId: acc.id, userId: user.id, permission: 'admin' },
+        });
+        return acc;
       });
 
       return reply.status(201).send(account);
@@ -72,7 +97,7 @@ export async function zaloRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Fire-and-forget — QR delivered via Socket.IO
-      zaloPool.loginQR(id).catch(() => {
+      zaloPool.loginQR(id, account.proxyUrl).catch(() => {
         // errors are emitted via socket; no need to crash here
       });
 
@@ -105,7 +130,7 @@ export async function zaloRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Fire-and-forget — result emitted via Socket.IO
-      zaloPool.reconnect(id, session).catch(() => {});
+      zaloPool.reconnect(id, session, account.proxyUrl).catch(() => {});
 
       return { message: 'Reconnect initiated' };
     },
@@ -150,4 +175,53 @@ export async function zaloRoutes(app: FastifyInstance): Promise<void> {
       return { accountId: id, liveStatus: zaloPool.getStatus(id) };
     },
   );
+
+  // PUT /api/v1/zalo-accounts/:id/proxy — update proxy config
+  app.put<{ Params: { id: string }; Body: { proxyUrl: string | null } }>(
+    '/api/v1/zalo-accounts/:id/proxy',
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user!;
+      const { proxyUrl } = request.body ?? {};
+
+      const account = await prisma.zaloAccount.findFirst({
+        where: { id, orgId: user.orgId },
+      });
+      if (!account) {
+        return reply.status(404).send({ error: 'Account not found' });
+      }
+
+      if (proxyUrl && !isValidProxyUrl(proxyUrl)) {
+        return reply.status(400).send({ error: 'Invalid proxy URL format. Use: http://[user:pass@]host:port' });
+      }
+
+      await prisma.zaloAccount.update({
+        where: { id },
+        data: { proxyUrl: proxyUrl ?? null },
+      });
+
+      return { message: 'Proxy updated', hasProxy: !!proxyUrl };
+    },
+  );
+}
+
+/** Mask proxy URL credentials for safe display */
+function maskProxyUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) parsed.password = '****';
+    return parsed.toString();
+  } catch {
+    return '****';
+  }
+}
+
+/** Validate proxy URL format: http(s)://[user:pass@]host:port */
+function isValidProxyUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) && !!parsed.hostname;
+  } catch {
+    return false;
+  }
 }

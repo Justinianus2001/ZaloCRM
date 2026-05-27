@@ -17,7 +17,7 @@ RUN npm run build
 
 # ── Stage 3: Production image ────────────────────────────────────────────────
 FROM node:20-alpine
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini ffmpeg
 WORKDIR /app
 
 # Copy built artefacts
@@ -32,4 +32,5 @@ RUN mkdir -p /var/lib/zalo-crm/files
 
 EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["sh", "-c", "attempt=1; max_attempts=30; until npx prisma db push --url \"$DATABASE_URL\"; do if [ \"$attempt\" -ge \"$max_attempts\" ]; then echo 'Prisma schema sync failed after retries'; exit 1; fi; echo \"Database not reachable for schema sync (attempt $attempt/$max_attempts). Retrying in 5s...\"; attempt=$((attempt + 1)); sleep 5; done; exec node dist/app.js"]
+# Push schema to DB then start server
+CMD ["sh", "-c", "npx prisma db push --accept-data-loss --url \"$DATABASE_URL\" && node dist/app.js"]
