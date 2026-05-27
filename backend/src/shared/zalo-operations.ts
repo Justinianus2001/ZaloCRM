@@ -643,7 +643,18 @@ async function getOwnId(accountId: string) {
 
 async function getAccountInfo(accountId: string) {
   return exec({ accountId, category: 'profile', operation: 'getAccountInfo' },
-    (api) => api.getAccountInfo());
+    (api) => {
+      if (typeof api.getAccountInfo === 'function') {
+        return api.getAccountInfo();
+      }
+      if (typeof api.getProfile === 'function') {
+        return api.getProfile();
+      }
+      if (typeof api.getOwnId === 'function' && typeof api.getUserInfo === 'function') {
+        return api.getUserInfo(api.getOwnId());
+      }
+      throw new TypeError('api.getAccountInfo is not a function and no fallback is available in Zalo SDK');
+    });
 }
 
 async function changeAccountAvatar(accountId: string, filePath: string) {

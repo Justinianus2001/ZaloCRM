@@ -636,11 +636,34 @@ export async function chatRoutes(app: FastifyInstance) {
       // hasZalo: luôn refresh (cheap, SDK authoritative)
       if (sdkIsFr === 1 && contact.hasZalo !== true) contactPatch.hasZalo = true;
       // globalId / username: backfill nếu chưa có
-      if (!contact.zaloGlobalId && sdkGlobalId) contactPatch.zaloGlobalId = sdkGlobalId;
-      if (!contact.zaloUsername && sdkUsername) contactPatch.zaloUsername = sdkUsername;
+      if (!contact.zaloGlobalId && sdkGlobalId) {
+        // Prevent Unique constraint violation on (org_id, zalo_global_id)
+        const takenGlobalId = await prisma.contact.findFirst({
+          where: { orgId: user.orgId, zaloGlobalId: sdkGlobalId },
+          select: { id: true },
+        });
+        if (!takenGlobalId) {
+          contactPatch.zaloGlobalId = sdkGlobalId;
+        }
+      }
+      if (!contact.zaloUsername && sdkUsername) {
+        // Prevent Unique constraint violation on (org_id, zalo_username) (nếu có)
+        const takenUsername = await prisma.contact.findFirst({
+          where: { orgId: user.orgId, zaloUsername: sdkUsername },
+          select: { id: true },
+        });
+        if (!takenUsername) {
+          contactPatch.zaloUsername = sdkUsername;
+        }
+      }
 
       if (Object.keys(contactPatch).length > 0) {
-        await prisma.contact.update({ where: { id: conv.contactId }, data: contactPatch });
+        try {
+          await prisma.contact.update({ where: { id: conv.contactId }, data: contactPatch });
+        } catch (err: any) {
+          // Fallback if there's a race condition
+          logger.warn(`[touch-profile] Failed to update contact ${conv.contactId}: ${err.message || err}`);
+        }
       }
 
       // Friend snapshot: zaloDisplayName + zaloAvatarUrl — per-pair, luôn refresh
