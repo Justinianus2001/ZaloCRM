@@ -178,7 +178,7 @@ export async function syncFriendsForAccount(
       : [];
   } catch (err) {
     result.errors++;
-    logger.warn(`[friend-sync:${accountId}] SDK fetch failed for getSentFriendRequests (ignoring):`, err);
+    logger.warn(`[friend-sync:${accountId}] SDK fetch failed for getSentFriendRequests (ignoring): ${err instanceof Error ? err.message : String(err)}`);
     await logSyncError(orgId, accountId, opts.trigger, err, { phase: 'sdk_fetch_sent' });
     // We do NOT return here. Continue processing liveFriends even if sent requests fail.
   }
