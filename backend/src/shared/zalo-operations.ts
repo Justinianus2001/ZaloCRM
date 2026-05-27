@@ -579,8 +579,15 @@ async function cancelFriendRequest(accountId: string, userId: string) {
 }
 
 async function getSentFriendRequests(accountId: string) {
-  return exec({ accountId, category: 'friend_read', operation: 'getSentFriendRequests' },
-    (api) => api.getSentFriendRequest());
+  return exec(
+    { 
+      accountId, 
+      category: 'friend_read', 
+      operation: 'getSentFriendRequests',
+      suppressErrorLog: (err) => err?.code === 112
+    },
+    (api) => api.getSentFriendRequest()
+  );
 }
 
 async function getFriendRequestStatus(accountId: string, userId: string) {
