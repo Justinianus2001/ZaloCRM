@@ -3,6 +3,8 @@ import { prisma } from '../../../shared/database/prisma-client.js';
 import { renderMessageTemplate } from '../template-renderer.js';
 import { zaloPool } from '../../zalo/zalo-pool.js';
 import { zaloRateLimiter } from '../../zalo/zalo-rate-limiter.js';
+import { applyContactAggregateFromMessage, applyFriendAggregate } from '../../contacts/contact-aggregate.js';
+import { formatMessage } from '../../../shared/text-formatter.js';
 
 export async function sendTemplateAction(input: {
   templateId: string;
@@ -31,25 +33,51 @@ export async function sendTemplateAction(input: {
   const instance = zaloPool.getInstance(input.zaloAccountId);
   if (!instance?.api) return null;
 
-  const limits = zaloRateLimiter.checkLimits(input.zaloAccountId);
+  const limits = await zaloRateLimiter.checkLimits(input.zaloAccountId);
   if (!limits.allowed) return null;
 
   zaloRateLimiter.recordSend(input.zaloAccountId);
   const threadType = input.threadType === 'group' ? 1 : 0;
-  const sendResult = await instance.api.sendMessage({ msg: content }, input.threadId, threadType);
+
+  // Phase 6 polish — convert markdown trong template (**bold**, *italic*, {red}...{/red})
+  // → Zalo style ranges. Trước fix này, KH nhận `**Bold**` plain text.
+  const formatted = formatMessage(content);
+  const sendPayload: Record<string, unknown> = { msg: formatted.text };
+  if (formatted.styles?.length) sendPayload.styles = formatted.styles;
+  if (formatted.mentions?.length) sendPayload.mentions = formatted.mentions;
+
+  const sendResult = await instance.api.sendMessage(sendPayload, input.threadId, threadType);
   const zaloMsgId = String(sendResult?.msgId || sendResult?.data?.msgId || '');
 
-  return prisma.message.create({
+  const created = await prisma.message.create({
     data: {
       id: randomUUID(),
       conversationId: input.conversationId,
       zaloMsgId: zaloMsgId || null,
+      zaloMsgIdNum: zaloMsgId && /^\d+$/.test(zaloMsgId) ? BigInt(zaloMsgId) : null,
       senderType: 'self',
       senderUid: null,
       senderName: 'Automation',
       content,
       contentType: 'text',
       sentAt: new Date(),
+      // Phase metrics 2026-05-22: bot gửi
+      sentVia: 'automation',
     },
   });
+
+  const aggInput = {
+    conversationId: input.conversationId,
+    message: {
+      id: created.id,
+      content: created.content,
+      contentType: created.contentType,
+      sentAt: created.sentAt,
+      senderType: 'self' as const,
+    },
+  };
+  void applyContactAggregateFromMessage(aggInput);
+  void applyFriendAggregate(aggInput);
+
+  return created;
 }
