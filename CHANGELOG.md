@@ -2,6 +2,70 @@
 
 Tất cả thay đổi đáng chú ý của ZaloCRM được ghi lại tại đây. Dự án dùng nhánh `main` làm dòng phát hành chính.
 
+## v3.3.3 — 28/05/2026
+
+### Fixed
+
+- **Tag Zalo Native không push qua Zalo SDK**: TagCrmBar khi user pick tag `managedBy='zalo_sync'` chỉ ghi vào `Contact.tags` qua `PUT /contacts/:id/tags` — không gọi Zalo SDK. Reload mất tag vì display logic chỉ lấy "🔵 X" từ `Friend.crmTagsPerNick`. Fix: route Zalo tags qua `POST /zalo-accounts/:id/labels/assign-thread` để push thật qua SDK, single-select per thread, null = unassign.
+- **Filter tag Zalo Native trong sidebar lọc sai (0 kết quả)**: backend dùng pattern Prisma sai `zaloLabels: { path: ['$[*].name'], array_contains: [name] }` → silently trả 0 rows. Đổi sang `zaloLabels: { array_contains: [{ name }] }` (translates `jsonb @>` containment). Áp dụng cho cả filter `zaloLabels` riêng và filter `tags` thống nhất.
+- **Tag Zalo Native không hiển thị trên conversation list + tag-crm-bar**: sync logic chỉ add mirror "🔵 X" cho `addedLabels` diff. Legacy data: friend có `zaloLabels` từ trước → sync lại thấy `addedLabels=[]` → không backfill mirror → 41/74 friends bị empty `crmTagsPerNick`. Fix: rebuild mirror from scratch mỗi sync — strip toàn bộ "🔵 ..." cũ, add lại cho TẤT CẢ labels hiện tại. Idempotent + self-healing. Kèm SQL backfill 74 friends.
+- **Trang `/settings/rbac/users` thiếu nút "Thêm nhân viên"**: RBAC redesign vô tình bỏ nút tạo từ `UserManagement.vue` cũ. Khôi phục nút ở góc phải hero (owner/admin only) + dialog tạo nhân viên (họ tên, email, mật khẩu, vai trò). Dùng `useUsers().createUser` có sẵn.
+
+## v3.3.2 — 28/05/2026
+
+### Fixed
+- **Ngắt kết nối nick Zalo không hiệu lực**: thêm `manuallyDisabled` Set trong `ZaloAccountPool` để chặn auto-reconnect sau khi user chủ động disconnect. `onDisconnected` callback và `autoReconnect` đều skip nếu account đã bị disable thủ công. Health check cron 5p + daily refresh + startup reconnect đều filter `status: 'disconnected'` và `archivedAt: null`.
+- **Uptime 7d luôn 0%**: bảng `zalo_account_status_log` chưa được apply migration → tạo migration mới + backfill open record cho nick đang connected. Checkpoint cron 5p reconcile drift sau crash.
+- **Tin nhắn của nick đã xoá vẫn hiển thị trong /chat**: filter `zaloAccount.archivedAt: null` trong conversations list + counts endpoints.
+- **Drawer Chi tiết nick vẫn mở sau khi xoá nick**: tự đóng drawer sau khi xoá thành công.
+- **AI Format button không hiện khi paste text**: tách button ra ngoài format toolbar (mặc định ẩn), luôn hiện ở góc phải trên editor khi có text.
+
+### Added
+- **Soft-delete nick CRM với 2 mode**:
+  - TH1 (không check): chỉ ẩn nick khỏi quản lý, giữ session+zaloUid+data. Quét QR lại → auto-restore nick cũ với toàn bộ chat history.
+  - TH2 (check "Xoá toàn bộ dữ liệu..."): clear session+zaloUid, quét QR lại tạo nick CRM mới.
+  - Migration `20260528160000_add_zalo_account_archived_at` thêm cột `archived_at` + `purged`.
+- **Auto-restore archived account** trên `loginQR`: khi `zaloUid` trùng với nick archived (purged=false) → unarchive + xoá nick tạm + chuyển pool instance.
+- **Realtime status refresh**: thêm `onStatusChange` callback trong `use-zalo-accounts` để dashboard `fetchStats()+fetchEnriched()` ngay khi `zalo:connected/disconnected/error/reconnect-failed`.
+- **Nick row actions trong chat folder picker**: 4 nút SVG (Sync danh bạ, Sync lịch sử chat, Reconnect, Đăng nhập QR) bên cạnh mỗi nick. Disable theo trạng thái live.
+- **Toast notifications thống nhất**: `ToastContainer` chuyển sang góc trên phải, nền trắng + viền trái màu, icon + nút đóng (success/error/warning/info). Áp dụng cho sync danh bạ, sync lịch sử, xoá nick, mọi action errors.
+
+### Changed
+- Disable button theo trạng thái nick:
+  - Reconnect + Đăng nhập QR: mờ khi `connected`
+  - Ngắt kết nối: mờ khi không `connected`
+  - Sync lịch sử chat: mờ khi không `connected`
+- Backend `DELETE /api/v1/zalo-accounts/:id?purge=true|false` thay vì hard-delete.
+- `zalo-scope.ts` filter `archivedAt: null` → nick archived ẩn khỏi mọi dashboard query (org admin + member).
+
+### Dependencies
+- Thêm `exceljs` vào frontend (fix build error sau khi remove `xlsx` từ v3.3.1).
+
+## v3.3.1 — 28/05/2026
+
+### Security
+
+- **CRITICAL** Sửa SQL injection trong custom analytics report — `filters.source`/`filters.userId` từ request body bị concat thẳng vào `$queryRawUnsafe`, cho phép UNION-based extraction cross-tenant. Chuyển sang `prisma.$queryRaw` tagged template + `Prisma.sql` bound parameters.
+- **CRITICAL** Nâng cấp `fast-jwt` lên 6.2.4 (vá CVE crit-header bypass) và 18 dependency backend khác qua `npm audit fix`. Frontend audit giảm từ 7 → 2 vuln.
+- **HIGH** Bắt buộc xác thực trên các endpoint Zalo PII (`/api/v1/zalo-user-info/batch`, `/api/v1/zalo-user-info/:uid`, `/api/v1/zalo-sticker-list`) — trước đây không cần token, cho phép liệt kê số điện thoại/ngày sinh hàng loạt. Giới hạn batch từ 200 → 50 UID.
+- **HIGH** Thêm SSRF guard cho webhook URL do org admin cấu hình (`modules/api/webhook-service.ts`) — chặn loopback, RFC1918, link-local (169.254/16), IPv6 ULA/link-local, non-HTTPS. Shared util `ssrf-guard.ts` cũng thay thế regex inline trong `zapier-webhook.ts`.
+- **HIGH** Sửa IDOR và email enumeration oracle trong user-routes — member có thể tự đổi `email`/`teamId` của mình để chiếm password-reset. Thêm per-role field allowlist: member chỉ sửa `fullName`; admin thêm `email`+`teamId` (không tự sửa email); owner thêm `role`+`isActive`. Lỗi unique constraint trả về message chung, không lộ email tồn tại.
+- **HIGH** Thay thế `xlsx` (SheetJS community, GHSA-4r6h-8v6p-xvw6 prototype pollution + ReDoS, không có bản vá) bằng `exceljs` trong modal import danh sách khách hàng. Lazy-import để giữ bundle nhỏ.
+- **HIGH** MinIO: hard-fail khi thiếu `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` trong `.env` thay vì fallback về `minioadmin/minioadmin`.
+
+### Hygiene
+
+- Thêm `.env.bak*` và `.env.*.bak` vào `.gitignore` — ngăn commit nhầm file backup env.
+- Bổ sung biến Facebook integration (`FB_GRAPH_API_VERSION`, `FB_APP_ID`, `FB_APP_SECRET`, `FB_WEBHOOK_VERIFY_TOKEN`, `FB_TOKEN_ENC_KEY`, `FB_OAUTH_REDIRECT_URI`) vào `.env.example` kèm hướng dẫn tạo.
+
+### Upgrade notes
+
+Thêm vào `.env` trước khi `docker compose up`:
+```
+MINIO_ROOT_USER=<admin-user>
+MINIO_ROOT_PASSWORD=<strong-password>
+```
+
 ## v3.3.0 — 25/05/2026
 
 ### Added
