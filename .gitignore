@@ -8,6 +8,9 @@ backups/
 .DS_Store
 .gstack/
 
+# Understand-anything generated knowledge-graph cache (local only)
+.understand-anything/
+
 # Local dev artifacts — không commit
 .backfill*.sql
 .diag.sql
@@ -22,3 +25,6 @@ TODO.local.md
 /frontend/public/friends-v2.html
 /frontend/public/Giao Diện Tính Năng*.xlsx
 backend/static/
+
+# Build-time schema overlays (local only) — quy ước thư mục _* trong prisma/schema/
+backend/prisma/schema/_*/
